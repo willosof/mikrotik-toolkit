@@ -1,0 +1,8 @@
+<html>
+<head>
+	<title>MikroTik Toolkit</title>
+</head>
+<body>
+[% content %]
+</body>
+</html>

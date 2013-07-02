@@ -1,0 +1,30 @@
+#!/usr/bin/perl -w
+# MikroTik Toolkit Daemon
+# Author: William Viker <william.viker@gmail.com>
+
+push @INC, "../lib/";
+
+use strict;
+use Data::Dumper;
+
+# Load application modules
+use MTT::Config;
+use MTT::Log;
+use MTT::Backup;
+use MTT::Web;
+use MTT::Common;
+
+# Init application objects from modules
+our $config = MTT::Config->new();
+our $log    = MTT::Log->new();
+our $backup = MTT::Backup->new();
+our $web    = MTT::Web->new();
+our $common = MTT::Common->new();
+
+sub log {
+	my ($cat, $text) = @_;
+	print localtime()." [".uc($cat)."]: $text\n";
+}
+
+# Dive in
+do { $_->tick() for ($config,$log,$backup,$web,$common) } while(1);
