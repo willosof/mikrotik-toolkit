@@ -6,6 +6,8 @@ use HTTP::Tiny;
 use IO::Select;
 use MIME::Base64;
 use Template;
+use MIME::Types qw(by_suffix by_mediatype import_mime_types);
+
 
 our $buffer = {};
 our $request = {};
@@ -39,8 +41,12 @@ sub new {
 
 	$self->{'select'}->add($self->{'socket'});
 
+	main::log("www","Listening on http://0.0.0.0:8037");
+
 	bless $self, $class;
 	return $self;
+
+
 }
 
 
@@ -54,7 +60,7 @@ sub tick {
 
 			if ($fin == $self->{'socket'}) {
 				my $fhnew = $fin->accept;
-				binmode($fhnew, ":encoding(UTF-8)");
+				binmode($fhnew);#, ":encoding(UTF-8)");
 				$self->{'select'}->add($fhnew);
 				$state->{$fhnew} = 1;
 				$fh = $fhnew;
@@ -110,8 +116,8 @@ sub http_close {
 sub http_out {
 	my ($self, $fh, $output) = @_;
 	$fh->send($output);
-	chomp $output;
 }
+
 sub http_in {
 
 	my ($self, $fh, $input) = @_;
@@ -167,10 +173,14 @@ sub http_request {
 
 	my $location = $request->{$fh}->{'uri'}->{'path'};
 	
+	$location =~ s/\.\.\///gsi;
+	$location =~ s/\/\.\.//gsi;
+	$location =~ s/\.\.//gsi;
 
 	###############################################################
 
 	if ($location eq "/") {
+		main::log("www","Controller: /");
 		push @{$response->{$fh}->{'headers'}}, ["Content-Type","text/html; charset=UTF-8"];
 		$response->{$fh}->{'content'} = $self->http_template(
 			"index.tt", {
@@ -179,26 +189,50 @@ sub http_request {
 		);
 	}
 
-	elsif ($location =~ /\/static\/([a-z]+\.[a-z]+)$/) {
-		$response->{$fh}->{'content'} = Dumper $main::log;
+	elsif ($location =~ /^\/static\/([-_a-zA-Z0-9.\/]+\.[a-zA-Z]+)$/) {
+		main::log("www","Controller: /static/$1");
+		my ($mime_type, $encoding) = by_suffix($location);
+		push @{$response->{$fh}->{'headers'}}, ["Content-Type",$mime_type];
+		my $fhf; 
+		# TODO CHAOS CODE TODO CHAOS CODE TODO CHAOS CODE TODO CHAOS CODE TODO
+		if (open $fhf, "<", "static/$1") {
+			main::log("www","Controller: open( /static/$1 )");
+			push @{$response->{$fh}->{'headers'}}, ["Content-Type",$mime_type];
+			my $data = "";
+			sysread $fhf, $data, 1024*64 or die("ugh: $@ $!");
+			$response->{$fh}->{'content'} = substr($data,0);
+		}
+		else {
+			main::log("www","Controller: !open( /static/$1 )");
+			push @{$response->{$fh}->{'headers'}}, ["Content-Type","text/plain"];
+			$response->{$fh}->{'content'} = "Sorry, no such static file.";
+		}
 	}
 
 	elsif ($location eq "/syslog") {
+		main::log("www","Controller: /syslog");
 		$response->{$fh}->{'content'} = Dumper $main::log;
 	}
+
 	elsif ($location eq "/config") {
+		main::log("www","Controller: /config");
 		$response->{$fh}->{'content'} = Dumper $main::config;
 	}
+
 	elsif ($location eq "/backup") {
+		main::log("www","Controller: /backup");
 		$response->{$fh}->{'content'} = Dumper $main::backup;
 	}
 
 	else { 
+		main::log("www","Controller: <none>");
+		$response->{$fh}->{'content'} = "Not routed.";
 		$routed = 0; 
 	}
 
 	###############################################################
 
+	main::log("www","Controller (done)");
 	if ($routed) {
 		$self->http_response($fh, "OK", 200);
 	}
@@ -239,14 +273,6 @@ sub http_response {
 	$self->http_out($fh, $response->{$fh}->{'content'});
 
 	$self->http_close($fh);
-}
-
-sub http_static_favicon {
-	my ($self, $fh) = @_;
-	my $data = "AAABAAEAEBAAAAAAAABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAD///8A3b3BAN29wQDdvcEA3b3BANy6vgDw4OUAuH1/YJAzMsThxssA3L/EANa1uADXtroA17a6ANe2ugD///8A////AN6+wgDevsIA3r7CAN27vwDr1toAzZ+jJoQfHv98EA3/rGhpePTq8ADkzdEA5MzRAOTM0QDkzNEA////AP///wDavMAA2rzAANm6vgDhyc0A6NXZAIwtLNCGISD/kDQz/30QD//LnaA8////AOvZ2wDt3N4A7dzeAP///wD///8A4MPGAODDxgDiyMsA6dTYAJhBQqSDHRv/kTU0/5AzMv+JKCf/hiEg9ti3ugbm0NQA27zAANy+wgD///8A////ANi3uADXtrcA69vbALyEhVh6DQv/kTU0/48yMf+PMjH/kTU0/4QfHf+PMTHI7NjcAOXKzQDfwcQA////AP///wDjys0A8OHlAMOQkzN8Dw7/jjAv/48yMf+PMjH/jzIx/48yMf+RNjX/fRMR/6pgYYbv298A5szPAP///wD///8A////APnu8wCQMzPehiIg/5A0M/+PMjH/jzIx/48yMf+PMjH/jzIx/48zMv9/FhT/wY2PQd7BxQD///8A////ANClqgCyb3FffhQS/5E2Nf+PMjH/jzIx4Y8yMVuPMjE6jzIxsI8yMf+QMzL/iCUj/48yMY6PMjEH////AP///wCPMjEHjzIxqYkoJv+PMjH/jzIx/48yMTOPMjEAjzIxAI8yMQCPMjG8jzIx/5A0M/+PMjHCjzIxAP///wD///8AjzIxII8yMamPMTD/jzIx/48yMe6PMjEAjzIxAI8yMQCPMjEAjzIxZI8yMf+PMjH/jzIx/48yMTb///8A////AI8yMQePMjGpjC0r/48yMf+PMjH/jzIxHY8yMQCPMjEAjzIxAI8yMZ+PMjH/jzIx/48yMamPMjEA////AP///wC+iI0Rn09Qj4McGv+QNDP/jzIx/48yMcGPMjEVjzIxAo8yMXePMjH/jzIx/44vLv+PMjGpjzIxB48yMQf///8AxZOXALuAgxeFIB7/jjEw/48yMf+PMjH/jzIx/o8yMf2PMjH/jzIx/5E2Nf9/FhT/qF9gg8mboAz///8A////AOHDxgDr1toAs3JzfoAWFP+PMjD/jzIx/48yMf+PMjH/jzIx/48yMf+FIB7/l0BAxuHGyQDlzdAA////AP///wDn0tMA7t3fAN/BxQCZQ0V5iCcl/4knJf+LKyr/ji8u/4cjIf+KKij/jS8uxMiXmw7hxckA17S2AP///wD///8A5MvNAOjS1ADburwAqmJlAJ9PURygT1GEkzk51pA0M+WfTk+nolVXPqNVVwDJmp0A2Le5ANi2uAD///8A/38AAP5/AAD8PwAA+B8AAPgPAADwBwAA4AcAAOGDAADDwwAAw+MAAMPDAADBwwAA4AMAAPAHAAD4DwAA/D8AAA==";
-	$self->http_header($fh, "Content-Type","image/ico");
-	return decode_base64($data);
-
 }
 
 sub http_template {
